@@ -58,15 +58,23 @@
             reader.onerror = error => reject(error);
         });
 
-        uploadForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const file = pdfInput.files[0];
-            if (!file) return;
+     uploadForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const file = pdfInput.files[0];
+    
+    // Вставляем проверку сразу после получения файла
+    if (!file) return;
 
-            submitBtn.disabled = true;
-            statusDiv.classList.remove('hidden');
-            spinner.classList.remove('hidden');
-            
+    if (file.size > 20 * 1024 * 1024) {
+        alert("Файл слишком большой! Максимальный размер — 20 МБ.");
+        return; // Прекращаем выполнение, код дальше не пойдет
+    }
+
+    // Только если проверка пройдена, блокируем кнопку и показываем спиннер
+    submitBtn.disabled = true;
+    statusDiv.classList.remove('hidden');
+    spinner.classList.remove('hidden');
+
             try {
                 // ШАГ 1: Извлечение структуры из PDF
                 statusText.innerHTML = 'Шаг 1 из 2: Нейросеть Gemini читает PDF спецификации...<br><span class="text-gray-400 text-xs">Обычно это занимает 5-8 секунд</span>';
