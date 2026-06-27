@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Генератор смет | MVP</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans antialiased min-h-screen flex items-center justify-center p-4">
+
+    <div class="bg-white p-8 sm:p-10 rounded-2xl shadow-sm border border-gray-100 max-w-lg w-full">
+        <h1 class="text-2xl font-medium mb-2">Генерация сметы</h1>
+        <p class="text-gray-500 text-sm mb-8">Загрузите PDF-проект электрики. Система распознает спецификации, найдет актуальные цены на маркетплейсах и соберет Excel-файл.</p>
+
+        <form id="uploadForm" class="space-y-6">
+            <div class="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center hover:bg-gray-50 transition-colors relative">
+                <input type="file" id="pdfInput" accept=".pdf" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" required>
+                <div class="pointer-events-none flex flex-col items-center">
+                    <svg class="w-10 h-10 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                    </svg>
+                    <span class="text-sm font-medium text-gray-700" id="fileName">Выберите PDF-файл</span>
+                    <span class="text-xs text-gray-400 mt-1">до 10 MB</span>
+                </div>
+            </div>
+
+            <button type="submit" id="submitBtn" class="w-full bg-black text-white py-3.5 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors focus:outline-none focus:ring-4 focus:ring-gray-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                Запустить обработку
+            </button>
+        </form>
+
+        <div id="status" class="mt-6 text-sm flex flex-col items-center space-y-3 hidden">
+            <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-black"></div>
+            <span id="statusText" class="text-gray-600 font-medium">Анализ документа через Gemini...</span>
+        </div>
+    </div>
+
+    <script>
+        // ВНИМАНИЕ: Сюда нужно будет вставить URL вебхука от Latenode
+        const LATENODE_WEBHOOK_URL = 'https://webhook.latenode.com/your-webhook-id';
+
+        const pdfInput = document.getElementById('pdfInput');
+        const fileNameDisplay = document.getElementById('fileName');
+        const uploadForm = document.getElementById('uploadForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const statusDiv = document.getElementById('status');
+        const statusText = document.getElementById('statusText');
+
+        // Обновление имени файла при выборе
+        pdfInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                fileNameDisplay.textContent = e.target.files[0].name;
+            } else {
+                fileNameDisplay.textContent = 'Выберите PDF-файл';
+            }
+        });
+
+        // Конвертация файла в Base64 для отправки через JSON
+        const toBase64 = file => new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = error => reject(error);
+        });
+
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const file = pdfInput.files[0];
+            if (!file) return;
+
+            // Блокируем кнопку и показываем лоадер
+            submitBtn.disabled = true;
+            statusDiv.classList.remove('hidden');
+            
+            try {
+                statusText.textContent = 'Чтение файла...';
+                const base64File = await toBase64(file);
+
+                statusText.textContent = 'Отправка данных на сервер (Latenode)...';
+                
+                // Отправка запроса на вебхук Latenode
+                const response = await fetch(LATENODE_WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        fileName: file.name,
+                        fileData: base64File 
+                    })
+                });
+
+                if (!response.ok) throw new Error('Ошибка сервера при обработке');
+
+                statusText.textContent = 'Сбор цен и артикулов...';
+                const enrichedData = await response.json(); // Ожидаем JSON-массив от Latenode
+
+                statusText.textContent = 'Формирование Excel...';
+                generateEstimateExcel(enrichedData);
+
+                statusText.textContent = 'Готово! Смета загружена.';
+                statusDiv.querySelector('.animate-spin').classList.add('hidden'); // Убираем спиннер
+
+            } catch (error) {
+                console.error(error);
+                statusText.textContent = 'Произошла ошибка. Проверьте консоль.';
+                statusText.classList.add('text-red-500');
+            } finally {
+                submitBtn.disabled = false;
+                // Через 3 секунды прячем статус
+                setTimeout(() => {
+                    statusDiv.classList.add('hidden');
+                    statusText.classList.remove('text-red-500');
+                    statusDiv.querySelector('.animate-spin').classList.remove('hidden');
+                }, 3000);
+            }
+        });
+
+        // Функция сборки Excel (из предыдущего этапа)
+        function generateEstimateExcel(enrichedData) {
+            const wb = XLSX.utils.book_new();
+            const categories = {};
+            
+            // Защита: если сервер вернул пустой ответ или ошибку
+            if (!Array.isArray(enrichedData)) {
+                alert("Ошибка структуры данных от сервера.");
+                return;
+            }
+
+            enrichedData.forEach(item => {
+                if (!categories[item.category]) categories[item.category] = [];
+                categories[item.category].push(item);
+            });
+
+            const sheetData = [];
+            const headers = ["Позиция", "Наименование", "Бренд", "Артикул", "Ед. изм.", "Кол-во", "Цена (руб.)", "Сумма (руб.)", "Ссылка"];
+            let globalRowIndex = 1;
+            const formulaRanges = [];
+
+            for (const [categoryName, items] of Object.entries(categories)) {
+                sheetData.push([]);
+                sheetData.push([categoryName.toUpperCase()]);
+                globalRowIndex += 2;
+                
+                sheetData.push(headers);
+                const headerRowIndex = ++globalRowIndex;
+                const startRow = globalRowIndex + 1;
+                
+                items.forEach((item, index) => {
+                    sheetData.push([
+                        index + 1,
+                        item.name || "-",
+                        item.brand || "Не указан",
+                        item.article || "—",
+                        item.unit || "шт",
+                        Number(item.quantity || 0),
+                        Number(item.price || 0),
+                        "", 
+                        item.url || ""
+                    ]);
+                    globalRowIndex++;
+                });
+                
+                const endRow = globalRowIndex;
+                sheetData.push(["", "ИТОГО ПО КАТЕГОРИИ:", "", "", "", "", "", "", ""]);
+                globalRowIndex++;
+                
+                formulaRanges.push({ start: startRow, end: endRow, totalRow: globalRowIndex });
+            }
+
+            const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+            // Прописываем формулы
+            formulaRanges.forEach(range => {
+                for (let r = range.start; r <= range.end; r++) {
+                    ws[`H${r}`] = { t: 'n', f: `F${r}*G${r}` };
+                    const urlCellRef = `I${r}`;
+                    if (ws[urlCellRef] && ws[urlCellRef].v && ws[urlCellRef].v.toString().startsWith('http')) {
+                        ws[urlCellRef] = { t: 's', v: "Открыть", l: { target: ws[urlCellRef].v } };
+                    }
+                }
+                ws[`H${range.totalRow}`] = { t: 'n', f: `SUM(H${range.start}:H${range.end})` };
+            });
+
+            ws['!cols'] = [
+                { wch: 8 }, { wch: 50 }, { wch: 15 }, { wch: 15 }, 
+                { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 15 }, { wch: 12 }
+            ];
+
+            XLSX.utils.book_append_sheet(wb, ws, "Смета");
+            XLSX.writeFile(wb, "ПРОЕКТ_СМЕТА_АВТОМАТИКА.xlsx");
+        }
+    </script>
+</body>
+</html>
