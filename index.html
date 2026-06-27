@@ -88,7 +88,11 @@
                 });
 
                 const items = await response.json();
-                if (items.error) throw new Error(items.error);
+                if (items.error) {
+    // Пытаемся достать понятное сообщение из ответа Gemini, либо превращаем весь объект в строку
+    const errorMessage = items.error.message || JSON.stringify(items.error);
+    throw new Error(errorMessage);
+}
 
                 // ШАГ 2: Поочередный скрапинг цен на фронтенде
                 statusText.innerHTML = `Найдено позиций: ${items.length}. Начинаем онлайн-парсинг цен...`;
