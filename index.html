@@ -20,7 +20,7 @@
                     <svg class="w-10 h-10 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
                     </svg>
-                    <span class="text-sm font-medium text-gray-700 id-fileName" id="fileName">Выберите PDF-файл проекта</span>
+                    <span class="text-sm font-medium text-gray-700" id="fileName">Выберите PDF-файл проекта</span>
                 </div>
             </div>
             <button type="submit" id="submitBtn" class="w-full bg-blue-600 text-white py-3.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50">
@@ -35,8 +35,8 @@
     </div>
 
     <script>
-        // НАСТРОЙКА КЛЮЧЕЙ И URL (Замените URL на ваш эндпоинт из Pipedream)
-        const BACKEND_URL = 'https://eojnvtpwshhdhwc.m.pipedream.net';
+        // Добавлен query-параметр pipedream_upload_body=1 для передачи тяжелых PDF
+        const BACKEND_URL = 'https://eojnvtpwshhdhwc.m.pipedream.net?pipedream_upload_body=1';
         const SCRAPINGANT_API_KEY = '24300b4e42584e17bca6b87edd528c5b';
 
         const pdfInput = document.getElementById('pdfInput');
@@ -148,7 +148,6 @@
             let searchQuery = queryParts.join(" ");
             
             let targetUrl = "https://www.etm.ru/catalog?search=" + encodeURIComponent(searchQuery);
-            // Исправлен query-параметр ключа на ant-api-key для ScrapingAnt v2 API
             let antUrl = "https://api.scrapingant.com/v2/general?url=" + encodeURIComponent(targetUrl) + "&ant-api-key=" + apiKey + "&browser=true";
             
             let result = { price: 0, url: targetUrl, realArticle: null };
@@ -157,7 +156,6 @@
                 let res = await fetch(antUrl);
                 if (res.ok) {
                     let html = await res.text();
-                    // Улучшенный регулярный парсинг с поддержкой пробелов тысяч и запятых
                     let priceMatch = html.match(/"price":\s*([\d\s.,]+)/) || html.match(/data-price="([\d\s.,]+)"/) || html.match(/class="[^"]*price[^"]*"[^>]*>([\d\s.,]+)/);
                     if (priceMatch) {
                         let cleanedPrice = priceMatch[1].replace(/[\s\u00A0]/g, '').replace(',', '.');
@@ -175,7 +173,6 @@
                 console.warn("Не удалось спарсить данные с ScrapingAnt для: " + item.name, e);
             }
             
-            // Умный фолбек цен, если товар временно отсутствует или не найден
             if (!result.price || result.price === 0) {
                 const textLower = (item.name || "").toLowerCase();
                 result.price = textLower.includes("кабель") || textLower.includes("провод") ? 185 : 430; 
@@ -188,7 +185,6 @@
             const wb = XLSX.utils.book_new();
             const categories = {};
             
-            // Группировка по категориям
             enrichedData.forEach(item => {
                 const cat = item.category || "Прочее";
                 if (!categories[cat]) categories[cat] = [];
@@ -201,23 +197,21 @@
             let currentRowIndex = 0;
             const titleRows = [], headerRows = [], totalRows = [], dataRows = [], formulaRanges = [];
 
-            // Главный заголовок документа (с заполнением ячеек для корректной заливки всего диапазона)
             sheetData.push(["АВТОМАТИЗИРОВАННЫЙ РАСЧЕТ СМЕТЫ МАТЕРИАЛОВ", "", "", "", "", "", "", "", ""]);
             titleRows.push(currentRowIndex);
             sheetData.push(["", "", "", "", "", "", "", "", ""]); 
             currentRowIndex += 2;
 
-            // Наполнение данными по категориям
             for (const [categoryName, items] of Object.entries(categories)) {
                 sheetData.push([categoryName.toUpperCase(), "", "", "", "", "", "", "", ""]);
-                titleRows.push(currentRowIndex); // Строка категории стилизуется как подзаголовок
+                titleRows.push(currentRowIndex);
                 currentRowIndex++;
                 
                 sheetData.push(headers);
                 headerRows.push(currentRowIndex);
                 currentRowIndex++;
                 
-                const startRowXls = currentRowIndex + 1; // 1-based индекс строки в Excel
+                const startRowXls = currentRowIndex + 1;
                 items.forEach((item, index) => {
                     sheetData.push([
                         index + 1, 
@@ -227,7 +221,7 @@
                         item.unit || "шт.", 
                         Number(item.quantity || 0), 
                         Number(item.price || 0), 
-                        0, // Место под формулу умножения Кол-во * Цена
+                        0, 
                         item.url || ""
                     ]);
                     dataRows.push(currentRowIndex);
@@ -245,7 +239,6 @@
 
             const ws = XLSX.utils.aoa_to_sheet(sheetData);
 
-            // Определение единого минималистичного стиля границ
             const borderStyle = {
                 top: { style: "thin", color: { rgb: "E2E8F0" } },
                 bottom: { style: "thin", color: { rgb: "E2E8F0" } },
@@ -253,7 +246,6 @@
                 right: { style: "thin", color: { rgb: "E2E8F0" } }
             };
 
-            // 1. Сначала проходим по базовой разметке структуры и ячеек
             Object.keys(ws).forEach(cellRef => {
                 if (cellRef[0] === '!') return;
                 const cell = ws[cellRef];
@@ -262,46 +254,39 @@
                 
                 if (!cell.s) cell.s = {};
                 
-                // Применение базовых границ ко всему документу, кроме первой строки названия
                 if (row > 0) cell.s.border = borderStyle;
                 
                 if (titleRows.includes(row)) {
                     if (row === 0) {
-                        // Главное название
                         cell.s = {
                             font: { bold: true, size: 12, color: { rgb: "FFFFFF" }, name: "Arial" },
-                            fill: { fgColor: { rgb: "1E293B" } }, // Slate 800
+                            fill: { fgColor: { rgb: "1E293B" } },
                             alignment: { horizontal: "center", vertical: "center" }
                         };
                     } else {
-                        // Заголовки категорий
                         cell.s = {
                             font: { bold: true, size: 10, color: { rgb: "0F172A" }, name: "Arial" },
-                            fill: { fgColor: { rgb: "F1F5F9" } }, // Slate 100
+                            fill: { fgColor: { rgb: "F1F5F9" } },
                             alignment: { horizontal: "left", vertical: "center" },
                             border: borderStyle
                         };
                     }
                 } else if (headerRows.includes(row)) {
-                    // Колонки шапки таблицы
                     cell.s = {
                         font: { bold: true, size: 9, color: { rgb: "FFFFFF" }, name: "Arial" },
-                        fill: { fgColor: { rgb: "475569" } }, // Slate 600
+                        fill: { fgColor: { rgb: "475569" } },
                         alignment: { horizontal: "center", vertical: "center" },
                         border: borderStyle
                     };
                 } else if (totalRows.includes(row)) {
-                    // Стилизация строки Итого
                     cell.s = {
                         font: { bold: true, size: 9, color: { rgb: "0F172A" }, name: "Arial" },
                         fill: { fgColor: { rgb: "F8FAFC" } },
                         border: borderStyle
                     };
                 } else if (dataRows.includes(row)) {
-                    // Строки данных: базовая типографика
                     cell.s.font = { size: 9, name: "Arial", color: { rgb: "334155" } };
                     
-                    // Геометрическое выравнивание данных по колонкам
                     if (col === 'A' || col === 'E') {
                         cell.s.alignment = { horizontal: "center", vertical: "center" };
                     } else if (col === 'F' || col === 'G' || col === 'H') {
@@ -312,10 +297,8 @@
                 }
             });
 
-            // 2. Накладываем формулы, гиперссылки и числовые форматы (поверх базовых стилей)
             formulaRanges.forEach(range => {
                 for (let r = range.start; r <= range.end; r++) {
-                    // Формула умножения в колонке H
                     ws[`H${r}`] = { 
                         t: 'n', 
                         f: `F${r}*G${r}`, 
@@ -327,7 +310,6 @@
                         } 
                     };
 
-                    // Оформление кликабельной ссылки
                     if (ws[`I${r}`] && ws[`I${r}`].v && ws[`I${r}`].v.toString().startsWith('http')) {
                         ws[`I${r}`] = { 
                             t: 's', 
@@ -342,7 +324,6 @@
                     }
                 }
                 
-                // Формула суммы по всей категории
                 ws[`H${range.totalRow}`] = { 
                     t: 'n', 
                     f: `SUM(H${range.start}:H${range.end})`, 
@@ -356,20 +337,18 @@
                 };
             });
 
-            // Объединение ячеек для главного заголовка сметы (A1:I1)
             ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 8 } }];
 
-            // Автоматические отступы и ширина колонок для предотвращения обрезки контента (###)
             ws['!cols'] = [
-                { wch: 6 },  // Поз.
-                { wch: 48 }, // Наименование материала
-                { wch: 14 }, // Бренд
-                { wch: 16 }, // Артикул
-                { wch: 8 },  // Ед. изм.
-                { wch: 9 },  // Кол-во
-                { wch: 13 }, // Цена
-                { wch: 15 }, // Сумма
-                { wch: 16 }  // Ссылка
+                { wch: 6 },  
+                { wch: 48 }, 
+                { wch: 14 }, 
+                { wch: 16 }, 
+                { wch: 8 },  
+                { wch: 9 },  
+                { wch: 13 }, 
+                { wch: 15 }, 
+                { wch: 16 }  
             ];
 
             XLSX.utils.book_append_sheet(wb, ws, "Смета проекта");
