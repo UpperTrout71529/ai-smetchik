@@ -58,41 +58,49 @@
             reader.onerror = error => reject(error);
         });
 
-     uploadForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const file = pdfInput.files[0];
-    
-    // Вставляем проверку сразу после получения файла
-    if (!file) return;
+    uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const file = pdfInput.files[0];
+            
+            if (!file) return;
 
-    if (file.size > 20 * 1024 * 1024) {
-        alert("Файл слишком большой! Максимальный размер — 20 МБ.");
-        return; // Прекращаем выполнение, код дальше не пойдет
-    }
+            if (file.size > 20 * 1024 * 1024) {
+                alert("Файл слишком большой! Максимальный размер — 20 МБ.");
+                return;
+            }
 
-    // Только если проверка пройдена, блокируем кнопку и показываем спиннер
-    submitBtn.disabled = true;
-    statusDiv.classList.remove('hidden');
-    spinner.classList.remove('hidden');
+            submitBtn.disabled = true;
+            statusDiv.classList.remove('hidden');
+            spinner.classList.remove('hidden');
 
             try {
                 // ШАГ 1: Извлечение структуры из PDF
-                statusText.innerHTML = 'Шаг 1 из 2: Нейросеть Gemini читает PDF спецификации...<br><span class="text-gray-400 text-xs">Обычно это занимает 5-8 секунд</span>';
+                statusText.innerHTML = 'Шаг 1 из 2: Отправка PDF и анализ ИИ...<br><span class="text-gray-400 text-xs">Тяжелые файлы могут обрабатываться до 60 секунд</span>';
                 const base64File = await toBase64(file);
 
                 const response = await fetch(GOOGLE_SCRIPT_URL, {
                     method: 'POST',
-                    mode: 'cors',
-                    headers: { 'Content-Type': 'text/plain' },
+                    // Указываем text/plain, чтобы браузер не отправлял CORS OPTIONS запрос
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                     body: JSON.stringify({ fileData: base64File })
                 });
 
-                const items = await response.json();
+                // Читаем ответ как обычный текст, а не JSON! 
+                // Это спасет нас, если Google вернет системный HTML с ошибкой.
+                const responseText = await response.text();
+                
+                let items;
+                try {
+                    items = JSON.parse(responseText);
+                } catch (parseError) {
+                    console.error("Сырой ответ сервера:", responseText);
+                    throw new Error("Сервер упал с критической ошибкой. Посмотрите вкладку Executions в Apps Script.");
+                }
+
                 if (items.error) {
-    // Пытаемся достать понятное сообщение из ответа Gemini, либо превращаем весь объект в строку
-    const errorMessage = items.error.message || JSON.stringify(items.error);
-    throw new Error(errorMessage);
-}
+                    const errorMessage = items.error.message || JSON.stringify(items.error);
+                    throw new Error(errorMessage);
+                }
 
                 // ШАГ 2: Поочередный скрапинг цен на фронтенде
                 statusText.innerHTML = `Найдено позиций: ${items.length}. Начинаем онлайн-парсинг цен...`;
@@ -117,7 +125,7 @@
 
             } catch (error) {
                 console.error(error);
-                statusText.textContent = 'Ошибка выполнения. Проверьте консоль браузера.';
+                statusText.innerHTML = `<b>Ошибка:</b> ${error.message}`;
                 statusText.classList.add('text-red-500');
                 spinner.classList.add('hidden');
             } finally {
