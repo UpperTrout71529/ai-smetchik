@@ -11,7 +11,7 @@
 
     <div class="bg-white p-8 sm:p-10 rounded-2xl shadow-sm border border-gray-100 max-w-lg w-full">
         <h1 class="text-2xl font-medium mb-2 text-slate-800">Генерация сметы</h1>
-        <p class="text-gray-500 text-sm mb-8">Загрузите PDF-проект. Система извлечет спецификацию через ИИ, а затем найдет актуальные цены на ETM через ScrapingAnt.</p>
+        <p class="text-gray-500 text-sm mb-8">Загрузите PDF-проект. Система извлечет спецификацию через ИИ, а затем поочередно найдет актуальные цены на ETM через ScrapingAnt.</p>
 
         <form id="uploadForm" class="space-y-6">
             <div class="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center hover:bg-gray-50 transition-colors relative" id="dropZone">
@@ -35,7 +35,6 @@
     </div>
 
     <script>
-    // Основной URL бэкенда (сохраняем параметр для загрузки тяжелых файлов)
 const BACKEND_URL = 'https://eojnvtpwshhdhwc.m.pipedream.net?pipedream_upload_body=1';
 
 const pdfInput = document.getElementById('pdfInput');
@@ -61,7 +60,6 @@ const toBase64 = file => new Promise((resolve, reject) => {
     reader.onerror = error => reject(error);
 });
 
-// ГЛАВНЫЙ СЛУШАТЕЛЬ СОБЫТИЯ ОТПРАВКИ
 uploadForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const file = pdfInput.files[0];
@@ -78,10 +76,9 @@ uploadForm.addEventListener('submit', async (e) => {
     spinner.classList.remove('hidden');
 
     try {
-        statusText.innerHTML = 'Шаг 1: Загрузка PDF на server...<br><span class="text-gray-400 text-xs">Это может занять несколько секунд для тяжелых спецификаций</span>';
+        statusText.innerHTML = 'Шаг 1: Загрузка PDF на сервер...<br><span class="text-gray-400 text-xs">Это может занять несколько секунд для тяжелых спецификаций</span>';
         const base64File = await toBase64(file);
 
-        // Посылаем POST-запрос для инициализации задачи
         const response = await fetch(BACKEND_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -99,11 +96,9 @@ uploadForm.addEventListener('submit', async (e) => {
             throw new Error("Сервер не вернул Идентификатор задачи (jobId).");
         }
 
-        // Начинаем опрос статуса задачи (Polling)
         statusText.innerHTML = 'Задача успешно поставлена в очередь. Ожидание запуска...';
         const enrichedData = await pollJobStatus(jobId);
 
-        // Если вышли из пуллинга без ошибок, значит данные готовы
         statusText.textContent = 'Формирование премиального Excel-документа...';
         generateEstimateExcel(enrichedData);
         
@@ -120,10 +115,9 @@ uploadForm.addEventListener('submit', async (e) => {
     }
 });
 
-// ФУНКЦИЯ ОПРОСА СТАТУСА (POLLING)
 async function pollJobStatus(jobId) {
     const pollUrl = `${BACKEND_URL}&jobId=${jobId}`;
-    const delay = 4000; // Интервал опроса — 4 секунды
+    const delay = 4000;
 
     while (true) {
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -153,7 +147,6 @@ async function pollJobStatus(jobId) {
     }
 }
 
-// Генерация стилизованного Excel (xlsx-js-style)
 function generateEstimateExcel(enrichedData) {
     const wb = XLSX.utils.book_new();
     const categories = {};
@@ -165,7 +158,8 @@ function generateEstimateExcel(enrichedData) {
     });
 
     const sheetData = [];
-    const headers = ["Поз.", "Наименование материала / оборудования", "Бренд", "Артикул", "Ед. изм.", "Кол-во", "Цена (руб.)", "Сумма (руб.)", "Ссылка на ETM"];
+    // Чистые минималистичные заголовки по ТЗ
+    const headers = ["№", "Наименование", "Бренд", "Артикул", "Ед.изм", "Кол-во", "Цена", "Итого (сумма)", "Ссылка"];
     
     let currentRowIndex = 0;
     const titleRows = [], headerRows = [], totalRows = [], dataRows = [], formulaRanges = [];
@@ -186,9 +180,9 @@ function generateEstimateExcel(enrichedData) {
         
         const startRowXls = currentRowIndex + 1;
         items.forEach((item, index) => {
-            // Принудительное очищение строк от букв/мусора и конвертация в чистые валидные числа
-            const safeQuantity = parseFloat(String(item.quantity || 0).replace(/,/g, '.').replace(/[^\d.]/g, '')) || 0;
-            const safePrice = parseFloat(String(item.price || 0).replace(/,/g, '.').replace(/[^\d.]/g, '')) || 0;
+            // Проверяем, является ли цена числом или строкой ошибки
+            const rawPrice = item.price;
+            const isPriceNumeric = !isNaN(parseFloat(rawPrice)) && isFinite(rawPrice);
 
             sheetData.push([
                 index + 1, 
@@ -196,9 +190,9 @@ function generateEstimateExcel(enrichedData) {
                 item.brand || "—", 
                 item.article || "—", 
                 item.unit || "шт.", 
-                safeQuantity, 
-                safePrice, 
-                0, 
+                Number(item.quantity || 0), 
+                isPriceNumeric ? Number(rawPrice) : rawPrice, 
+                0, // Будет заменено формулой Excel ниже
                 item.url || ""
             ]);
             dataRows.push(currentRowIndex);
@@ -216,6 +210,7 @@ function generateEstimateExcel(enrichedData) {
 
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
 
+    // Тонкие, не отвлекающие границы
     const borderStyle = {
         top: { style: "thin", color: { rgb: "E2E8F0" } },
         bottom: { style: "thin", color: { rgb: "E2E8F0" } },
@@ -232,17 +227,18 @@ function generateEstimateExcel(enrichedData) {
         if (!cell.s) cell.s = {};
         if (row > 0) cell.s.border = borderStyle;
         
+        // Стилизация строго по ТЗ (Arial, размеры 9-10, отсутствие шума)
         if (titleRows.includes(row)) {
             if (row === 0) {
                 cell.s = {
-                    font: { bold: true, size: 12, color: { rgb: "FFFFFF" }, name: "Arial" },
-                    fill: { fgColor: { rgb: "1E293B" } },
+                    font: { bold: true, size: 10, color: { rgb: "FFFFFF" }, name: "Arial" },
+                    fill: { fgColor: { rgb: "1E293B" } }, // Строгий темный сланец
                     alignment: { horizontal: "center", vertical: "center" }
                 };
             } else {
                 cell.s = {
-                    font: { bold: true, size: 10, color: { rgb: "0F172A" }, name: "Arial" },
-                    fill: { fgColor: { rgb: "F1F5F9" } },
+                    font: { bold: true, size: 9, color: { rgb: "1E293B" }, name: "Arial" },
+                    fill: { fgColor: { rgb: "F8FAFC" } }, // Едва заметный тон для категорий
                     alignment: { horizontal: "left", vertical: "center" },
                     border: borderStyle
                 };
@@ -250,7 +246,7 @@ function generateEstimateExcel(enrichedData) {
         } else if (headerRows.includes(row)) {
             cell.s = {
                 font: { bold: true, size: 9, color: { rgb: "FFFFFF" }, name: "Arial" },
-                fill: { fgColor: { rgb: "475569" } },
+                fill: { fgColor: { rgb: "475569" } }, // Контрастная строгая шапка таблицы
                 alignment: { horizontal: "center", vertical: "center" },
                 border: borderStyle
             };
@@ -262,36 +258,63 @@ function generateEstimateExcel(enrichedData) {
             };
         } else if (dataRows.includes(row)) {
             cell.s.font = { size: 9, name: "Arial", color: { rgb: "334155" } };
+            
+            // Выравнивание контента для идеального чтения клиентом
             if (col === 'A' || col === 'E') {
                 cell.s.alignment = { horizontal: "center", vertical: "center" };
-            } else if (col === 'F' || col === 'G' || col === 'H') {
+            } else if (col === 'F') {
                 cell.s.alignment = { horizontal: "right", vertical: "center" };
+            } else if (col === 'G') {
+                // Если в ячейке цены строка ошибки, делаем её аккуратной и прижимаем влево
+                if (typeof cell.v === 'string') {
+                    cell.s.font = { size: 9, name: "Arial", color: { rgb: "94A3B8" }, italic: true };
+                    cell.s.alignment = { horizontal: "left", vertical: "center" };
+                } else {
+                    cell.s.alignment = { horizontal: "right", vertical: "center" };
+                    cell.s.numFmt = "#,##0.00";
+                }
             } else {
                 cell.s.alignment = { horizontal: "left", vertical: "center" };
             }
         }
     });
 
+    // Накатываем формулы автоматического расчета
     formulaRanges.forEach(range => {
         for (let r = range.start; r <= range.end; r++) {
+            const priceCell = ws[`G${r}`];
+            const isPriceNum = priceCell && priceCell.t === 'n';
+
+            // Умный расчет: если цена не число, пишем аккуратный прочерк во избежание #VALUE!
             ws[`H${r}`] = { 
-                t: 'n', 
-                f: `F${r}*G${r}`, 
+                t: isPriceNum ? 'n' : 's', 
+                f: `IF(ISNUMBER(G${r}), F${r}*G${r}, "—")`, 
                 s: { 
-                    font: { size: 9, name: "Arial", color: { rgb: "334155" } },
-                    numFmt: "#,##0.00", 
-                    alignment: { horizontal: "right", vertical: "center" },
+                    font: { size: 9, name: "Arial", color: isPriceNum ? { rgb: "334155" } : { rgb: "94A3B8" } },
+                    numFmt: isPriceNum ? "#,##0.00" : undefined, 
+                    alignment: { horizontal: isPriceNum ? "right" : "center", vertical: "center" },
                     border: borderStyle 
                 } 
             };
 
+            // Красивое и лаконичное оформление ссылок
             if (ws[`I${r}`] && ws[`I${r}`].v && ws[`I${r}`].v.toString().startsWith('http')) {
                 ws[`I${r}`] = { 
                     t: 's', 
-                    v: "Купить на ETM", 
-                    l: { Target: ws[`I${r}`].v.toString() }, // Изменено на 'Target' для полной интерактивности ссылки
+                    v: "Открыть на ETM", 
+                    l: { target: ws[`I${r}`].v }, 
                     s: { 
                         font: { color: { rgb: "2563EB" }, underline: true, size: 9, name: "Arial" }, 
+                        alignment: { horizontal: "center", vertical: "center" }, 
+                        border: borderStyle 
+                    } 
+                };
+            } else {
+                ws[`I${r}`] = { 
+                    t: 's', 
+                    v: "—", 
+                    s: { 
+                        font: { color: { rgb: "94A3B8" }, size: 9, name: "Arial" }, 
                         alignment: { horizontal: "center", vertical: "center" }, 
                         border: borderStyle 
                     } 
@@ -299,6 +322,7 @@ function generateEstimateExcel(enrichedData) {
             }
         }
         
+        // Автоматическая сумма категории (Excel сам пропустит текстовые прочерки)
         ws[`H${range.totalRow}`] = { 
             t: 'n', 
             f: `SUM(H${range.start}:H${range.end})`, 
@@ -314,15 +338,15 @@ function generateEstimateExcel(enrichedData) {
 
     ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 8 } }];
     ws['!cols'] = [
-        { wch: 6 },  
-        { wch: 48 }, 
-        { wch: 14 }, 
-        { wch: 16 }, 
-        { wch: 8 },  
-        { wch: 9 },  
-        { wch: 13 }, 
-        { wch: 15 }, 
-        { wch: 16 }  
+        { wch: 5 },   // №
+        { wch: 50 },  // Наименование
+        { wch: 14 },  // Бренд
+        { wch: 16 },  // Артикул
+        { wch: 8 },   // Ед.изм
+        { wch: 9 },   // Кол-во
+        { wch: 18 },  // Цена (с запасом под текст ошибки)
+        { wch: 15 },  // Итого
+        { wch: 16 }   // Ссылка
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, "Смета проекта");
