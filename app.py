@@ -43,16 +43,18 @@ if uploaded_file is not None:
             # --- ШАГ 2: Запрос к Gemini со Structured Outputs ---
             status.update(label="Шаг 2: Анализ схем и извлечение спецификации ИИ...", state="running")
             
-            model_name = "gemini-2.5-flash"
+            # ИСПОЛЬЗУЕМ СТРОГОЕ, СТАБИЛЬНОЕ ИМЯ МОДЕЛИ
+            model_name = "gemini-1.5-flash"
             
             if api_provider.startswith("ProxyAPI"):
-                gemini_url = f"https://api.proxyapi.ru/google/v1beta/models/gemini-flash-latest:generateContent"
+                # Собираем URL динамически с подстановкой model_name
+                gemini_url = f"https://api.proxyapi.ru/google/v1beta/models/{model_name}:generateContent"
                 headers = {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {gemini_api_key}"
                 }
             else:
-                gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+                gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
                 headers = {
                     "Content-Type": "application/json",
                     "X-goog-api-key": gemini_api_key
@@ -60,7 +62,6 @@ if uploaded_file is not None:
             
             prompt = "Ты — ведущий инженер-сметчик. Внимательно изучи переданный документ (спецификации или однолинейные схемы). Найди все материалы, кабели, щиты и оборудование. Сформируй строгий список объектов по указанной JSON-схеме. Пропускай текстовые описания проекта, собирай только номенклатуру для закупки."
 
-            # Внедряем технологию Structured Outputs (жесткая схема ответа для ИИ)
             payload = {
                 "contents": [{
                     "parts": [
@@ -92,9 +93,23 @@ if uploaded_file is not None:
                 response = requests.post(gemini_url, json=payload, headers=headers, timeout=180)
                 res_json = response.json()
                 
+                # Обработка стандартных ошибок Google (вкл. High Demand)
                 if 'error' in res_json:
                     status.update(label="Ошибка ИИ-сервера", state="error")
-                    st.error(f"Детали ошибки: {res_json['error'].get('message', '')}")
+                    st.error(f"Сервер Google отклонил запрос: {res_json['error'].get('message', '')}")
+                    st.info("Если ошибка 'high demand' - это ограничения бесплатного ключа на объемные файлы.")
+                    st.stop()
+                
+                # Обработка нестандартных ошибок ProxyAPI (Model not supported и т.д.)
+                if 'detail' in res_json:
+                    status.update(label="Ошибка ProxyAPI", state="error")
+                    st.error(f"Шлюз ProxyAPI вернул ошибку: {res_json['detail']}")
+                    st.stop()
+                
+                if 'candidates' not in res_json:
+                    status.update(label="Неизвестный ответ", state="error")
+                    st.error("В ответе нет данных (candidates). Выводим сырой ответ сервера для отладки:")
+                    st.json(res_json)
                     st.stop()
                 
                 text_response = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -103,7 +118,7 @@ if uploaded_file is not None:
                 
             except Exception as e:
                 status.update(label="Критическая ошибка разбора", state="error")
-                st.error(f"Не удалось обработать ответ. Возможно, Streamlit разорвал связь по таймауту. Ошибка: {str(e)}")
+                st.error(f"Не удалось обработать ответ. Ошибка: {str(e)}")
                 if 'res_json' in locals():
                     st.json(res_json)
                 st.stop()
@@ -112,7 +127,7 @@ if uploaded_file is not None:
             status.update(label="Шаг 3: Подготовка поисковых запросов к ETM...", state="running")
             final_data = []
             for item in parsed_items:
-                price = 430.00  # Базовая заглушка цены (в будущем сюда встанет парсер/API)
+                price = 430.00  # Базовая заглушка цены
                 try:
                     qty_str = str(item.get('quantity', '1')).replace(',', '.').strip()
                     qty = float(''.join(c for c in qty_str if c.isdigit() or c == '.'))
@@ -123,7 +138,6 @@ if uploaded_file is not None:
                 brand = item.get('brand', '').strip()
                 search_query = article if article else item.get('name', '')
                 
-                # Пометка для сметчика, если ИИ не нашел точный артикул на схеме
                 verification_flag = "Точный поиск" if article else "Проверить вручную (нет артикула)"
                 
                 final_data.append({
@@ -134,7 +148,7 @@ if uploaded_file is not None:
                     "Ед. изм.": item.get('unit', 'шт.'),
                     "Кол-во": qty,
                     "Цена (руб.)": price,
-                    "Сумма (руб.)": None,  # Заполним формулой Excel на Шаге 4
+                    "Сумма (руб.)": None, 
                     "Статус проверки": verification_flag,
                     "Ссылка на ETM": f"https://www.etm.ru/catalog?search={search_query}"
                 })
@@ -150,7 +164,6 @@ if uploaded_file is not None:
                 workbook = writer.book
                 worksheet = writer.sheets['Смета проекта']
                 
-                # Стилизация
                 header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
                 header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
                 data_font = Font(name="Arial", size=10)
@@ -164,53 +177,42 @@ if uploaded_file is not None:
                     bottom=Side(style='thin', color='D9D9D9')
                 )
                 
-                # Красим шапку
                 for col_num in range(1, len(df.columns) + 1):
                     cell = worksheet.cell(row=1, column=col_num)
                     cell.fill = header_fill
                     cell.font = header_font
                     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 
-                # Заполняем данными, прописываем формулы и форматы
                 for row_num in range(2, len(df) + 2):
-                    # Прописываем живую формулу умножения Excel: Кол-во (F) * Цена (G)
                     worksheet.cell(row=row_num, column=8, value=f"=F{row_num}*G{row_num}")
-                    
-                    # Форматируем ячейки цены и суммы
                     worksheet.cell(row=row_num, column=7).number_format = '#,##0.00'
                     worksheet.cell(row=row_num, column=8).number_format = '#,##0.00'
                     
-                    # Настраиваем ссылки
                     etm_url = df.iloc[row_num-2]["Ссылка на ETM"]
                     worksheet.cell(row=row_num, column=10).value = f'=HYPERLINK("{etm_url}", "Открыть в ETM")'
                     worksheet.cell(row=row_num, column=10).font = Font(name="Arial", size=10, color="0563C1", underline="single")
                     
-                    # Стилизуем строки данных
                     for col_num in range(1, len(df.columns) + 1):
                         cell = worksheet.cell(row=row_num, column=col_num)
                         cell.border = thin_border
                         if col_num != 10 and col_num != 9:
                             cell.font = data_font
                         
-                        # Если нет артикула, подсвечиваем статус проверки
                         if col_num == 9 and "Проверить" in str(cell.value):
                             cell.font = flag_font_attention
                         elif col_num == 9:
                             cell.font = data_font
 
-                # Добавляем строку ИТОГО
                 total_row = len(df) + 3
                 worksheet.cell(row=total_row, column=7, value="ИТОГО ПО СМЕТЕ:").font = total_font
                 worksheet.cell(row=total_row, column=8, value=f"=SUM(H2:H{total_row-1})").font = total_font
                 worksheet.cell(row=total_row, column=8).number_format = '#,##0.00'
                 
-                # Автоматический подбор ширины колонок
                 for col in worksheet.columns:
                     max_len = 0
                     col_letter = get_column_letter(col[0].column)
                     for cell in col:
                         if cell.value:
-                            # Убираем длину формулы из расчета ширины ссылки
                             val_str = str(cell.value)
                             if "HYPERLINK" in val_str:
                                 val_str = "Открыть в ETM"
