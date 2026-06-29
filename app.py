@@ -31,10 +31,11 @@ if uploaded_file is not None:
             bytes_data = uploaded_file.getvalue()
             pdf_base64 = base64.b64encode(bytes_data).decode("utf-8")
             
-            # --- ШАГ 2: Запрос к Gemini (Исправленный URL и Headers) ---
+         # --- ШАГ 2: Запрос к Gemini через российский шлюз ProxyAPI ---
             status.update(label="Шаг 2: Извлечение спецификации искусственным интеллектом...", state="running")
             
-            gemini_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+            # Направляем запрос на сервер ProxyAPI. Они зеркалируют эндпоинты Google
+            gemini_url = "https://api.proxyapi.ru/google/v1beta/models/gemini-1.5-flash:generateContent"
             
             prompt = """Ты — эксперт по анализу проектных спецификаций. 
 Преобразуй переданный PDF-документ (в формате base64) в строгий JSON-массив объектов.
@@ -55,6 +56,12 @@ if uploaded_file is not None:
                         {"inlineData": {"mimeType": "application/pdf", "data": pdf_base64}}
                     ]
                 }]
+            }
+            
+            # У ProxyAPI авторизация идет через стандартный заголовок Authorization: Bearer
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {gemini_api_key}"
             }
             
             # Передаем API-ключ в заголовках, как в рабочем CURL
